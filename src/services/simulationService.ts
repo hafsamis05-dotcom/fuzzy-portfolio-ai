@@ -94,17 +94,15 @@ function generatePortfolioData(): PortfolioPoint[] {
     });
   }
   
-  // M7_Cloud - Massive fuzzy space exploration (8500+ points)
-  const alphas = Array.from({ length: 15 }, (_, i) => 0.05 + i * 0.0643);
-  const betas = Array.from({ length: 15 }, (_, i) => 0.05 + i * 0.0643);
+  // M7_Cloud - Reduced for performance (1500 points vs 8500+)
+  const alphas = Array.from({ length: 10 }, (_, i) => 0.05 + i * 0.1);
+  const betas = Array.from({ length: 10 }, (_, i) => 0.05 + i * 0.1);
   
   for (const alpha of alphas) {
     for (const beta of betas) {
-      // Skip the optimal zone - those are M7_Best
       if (alpha >= 0.2 && alpha <= 0.4 && beta >= 0.8 && beta <= 1.0) continue;
       
-      // Generate multiple points per alpha/beta combination
-      for (let k = 0; k < 38; k++) {
+      for (let k = 0; k < 15; k++) {
         const varBase = 0.001 + (1 - beta) * 0.012;
         const retBase = alpha * 0.02 - 0.005;
         

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, memo } from 'react';
 import {
   ScatterChart,
   Scatter,
@@ -7,7 +7,6 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  Cell,
   ReferenceLine,
 } from 'recharts';
 import { PortfolioPoint } from '@/services/simulationService';
@@ -27,7 +26,29 @@ const modelConfig: Record<string, { color: string; name: string; zIndex: number 
   M7_Best: { color: 'hsl(152, 76%, 50%)', name: 'M7 Optimal ⭐', zIndex: 10 },
 };
 
-const CustomTooltip = ({ active, payload }: any) => {
+// Max points per model for performance
+const MAX_POINTS_PER_MODEL: Record<string, number> = {
+  M7_Cloud: 500,  // Heavy reduction for cloud
+  M1: 150,
+  M2: 100,
+  M3: 100,
+  M6: 100,
+  COMP: 80,
+  M7_Best: 150,
+};
+
+// Downsample array to max n elements with even distribution
+function downsample<T>(arr: T[], maxN: number): T[] {
+  if (arr.length <= maxN) return arr;
+  const step = arr.length / maxN;
+  const result: T[] = [];
+  for (let i = 0; i < maxN; i++) {
+    result.push(arr[Math.floor(i * step)]);
+  }
+  return result;
+}
+
+const CustomTooltip = memo(({ active, payload }: any) => {
   if (!active || !payload?.length) return null;
   
   const data = payload[0].payload;
@@ -38,9 +59,9 @@ const CustomTooltip = ({ active, payload }: any) => {
       <div className="flex items-center gap-2 mb-3">
         <div 
           className="w-3 h-3 rounded-full"
-          style={{ backgroundColor: config.color }}
+          style={{ backgroundColor: config?.color }}
         />
-        <span className="font-semibold text-sm">{config.name}</span>
+        <span className="font-semibold text-sm">{config?.name}</span>
       </div>
       <div className="space-y-2 text-sm">
         <div className="flex justify-between">
@@ -72,36 +93,42 @@ const CustomTooltip = ({ active, payload }: any) => {
       </div>
     </div>
   );
-};
+});
 
-export default function EfficientFrontierChart({ portfolios, enabledModels }: EfficientFrontierChartProps) {
+CustomTooltip.displayName = 'CustomTooltip';
+
+function EfficientFrontierChart({ portfolios, enabledModels }: EfficientFrontierChartProps) {
   const [hoveredModel, setHoveredModel] = useState<string | null>(null);
   
-  const chartData = useMemo(() => {
-    return portfolios
-      .filter(p => enabledModels.includes(p.model))
-      .map(p => ({
+  // Group and downsample data for performance
+  const { groupedData, sortedModels } = useMemo(() => {
+    const groups: Record<string, any[]> = {};
+    
+    // First group by model
+    const tempGroups: Record<string, PortfolioPoint[]> = {};
+    for (const p of portfolios) {
+      if (!enabledModels.includes(p.model)) continue;
+      if (!tempGroups[p.model]) tempGroups[p.model] = [];
+      tempGroups[p.model].push(p);
+    }
+    
+    // Downsample each group
+    for (const model of Object.keys(tempGroups)) {
+      const maxPoints = MAX_POINTS_PER_MODEL[model] || 100;
+      const sampled = downsample(tempGroups[model], maxPoints);
+      groups[model] = sampled.map(p => ({
         ...p,
         x: p.variance * 100,
         y: p.return * 100,
       }));
-  }, [portfolios, enabledModels]);
-
-  const groupedData = useMemo(() => {
-    const groups: Record<string, typeof chartData> = {};
-    chartData.forEach(point => {
-      if (!groups[point.model]) groups[point.model] = [];
-      groups[point.model].push(point);
-    });
-    return groups;
-  }, [chartData]);
-
-  // Sort by zIndex for proper layering
-  const sortedModels = useMemo(() => {
-    return Object.keys(groupedData).sort(
+    }
+    
+    const sorted = Object.keys(groups).sort(
       (a, b) => (modelConfig[a]?.zIndex || 0) - (modelConfig[b]?.zIndex || 0)
     );
-  }, [groupedData]);
+    
+    return { groupedData: groups, sortedModels: sorted };
+  }, [portfolios, enabledModels]);
 
   const getOpacity = (model: string) => {
     if (!hoveredModel) return model === 'M7_Cloud' ? 0.4 : 0.85;
@@ -116,7 +143,6 @@ export default function EfficientFrontierChart({ portfolios, enabledModels }: Ef
 
   return (
     <div className="w-full h-full relative">
-      {/* Background Grid Pattern */}
       <div className="absolute inset-0 chart-grid opacity-30 pointer-events-none" />
       
       <ResponsiveContainer width="100%" height="100%">
@@ -160,8 +186,6 @@ export default function EfficientFrontierChart({ portfolios, enabledModels }: Ef
             axisLine={{ stroke: 'hsl(var(--border))' }}
           />
           <Tooltip content={<CustomTooltip />} />
-          
-          {/* Reference lines */}
           <ReferenceLine y={0} stroke="hsl(var(--border))" strokeDasharray="5 5" />
           
           {sortedModels.map(model => (
@@ -169,22 +193,26 @@ export default function EfficientFrontierChart({ portfolios, enabledModels }: Ef
               key={model}
               name={modelConfig[model]?.name || model}
               data={groupedData[model]}
+              fill={modelConfig[model]?.color || '#888'}
+              fillOpacity={getOpacity(model)}
               onMouseEnter={() => setHoveredModel(model)}
               onMouseLeave={() => setHoveredModel(null)}
-            >
-              {groupedData[model].map((entry, index) => (
-                <Cell
-                  key={`cell-${index}`}
-                  fill={modelConfig[model]?.color || '#888'}
-                  fillOpacity={getOpacity(model)}
-                  r={getSize(model) / 10}
-                  style={{
-                    transition: 'fill-opacity 0.3s ease',
-                    filter: model === 'M7_Best' ? 'drop-shadow(0 0 6px hsl(152 76% 50% / 0.8))' : undefined,
-                  }}
-                />
-              ))}
-            </Scatter>
+              shape={(props: any) => {
+                const size = getSize(model) / 10;
+                return (
+                  <circle
+                    cx={props.cx}
+                    cy={props.cy}
+                    r={size}
+                    fill={modelConfig[model]?.color}
+                    fillOpacity={getOpacity(model)}
+                    style={{
+                      filter: model === 'M7_Best' ? 'drop-shadow(0 0 6px hsl(152 76% 50% / 0.8))' : undefined,
+                    }}
+                  />
+                );
+              }}
+            />
           ))}
         </ScatterChart>
       </ResponsiveContainer>
@@ -213,3 +241,5 @@ export default function EfficientFrontierChart({ portfolios, enabledModels }: Ef
     </div>
   );
 }
+
+export default memo(EfficientFrontierChart);
